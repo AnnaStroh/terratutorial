@@ -6,6 +6,7 @@ at the Atlantic Technological University (ATU). The tutorial provides an introdu
 
 *Uploaded material includes*:
 - lecture slides
+- example R code
 - R vignette for standard raster processing
 - Additional online resources for geostastical operations and R programming
 
