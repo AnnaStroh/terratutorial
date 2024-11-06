@@ -66,7 +66,10 @@ red_green <- multilayer[[1:2]] # or multiple layers
 ## Subset using subset()
 red2 <- subset(multilayer, 1) # also layer index
 
-
+## Subset raster values using clamp()
+    start <- 0 # assume interest in lower elevations
+    end <- 200 
+    low_elev <- clamp(example, start, end, values = TRUE)
 
 
 
