@@ -31,7 +31,7 @@ further use, i.e. modelling. This vignette includes code to:
 from spatiotemporal raster files using the R package `terra`.  
 
 ## _Relevant packages_
-```{package}
+```{r}
 
 library(terra) # raster work
 library(sf) # vector work
@@ -332,17 +332,7 @@ temperature.
 
 We define summer months as ranging from May to August. 
 
-`terra` offers temporal aggregation and spatial aggregation:
-
-* Temporal aggregation: aggregates raster values over chosen time interval,
-                        creates new raster with lower temporal resolution
-    + `tapp()`
-
-* Spatial aggregation: aggregates groups of cells to create larger cells,
-                       creates new raster with lower spatial resolution
-    + `aggregate()`
-
-Here, we are working only with temporal aggregation. `tapp()` accesses raster 
+Here, we are work with temporal aggregation. `tapp()` accesses raster 
 layers indexed by a time index (i.e. years), and aggregates 
 these layers over a given function (i.e. mean).
 
@@ -351,7 +341,7 @@ these layers over a given function (i.e. mean).
 ## Subset raster time dimension to sampling dates (also summer time)
 r_subset <- mpa_rast[[ time(mpa_rast) %in%  sampling_dates ]]
 
-## Aggregate summer and winter rasters
+## Aggregate for yearly summer value 
 # seasonal mean temperature for each year
 summer_agg <- tapp(r_subset, "years", fun = mean)
 summer_agg # note change in layer names and time dimension
@@ -364,7 +354,7 @@ plot(summer_agg)
 # Part 4: __Raster extraction__
 
 The last part of this vignette demonstrates how to extract raster values for a 
-given spatial geometry (point in this case). This is particularly useful for
+given spatial geometry (point here). This is particularly useful for
 linking raster-based environmental data to biological data at sampling locations 
 (i.e. stations). 
 
