@@ -24,7 +24,6 @@ further use, i.e. modelling. This vignette includes code to:
 
 * load, 
 * visualise,
-* subset,
 * manipulate, and 
 * extract data into csv formats 
 
@@ -48,9 +47,9 @@ library(tidyr)
 ## _Load raster data from ERDDAP servers_
 
 A spatio-temporal raster is inherently multi-layered, as it stores data in each 
-layer corresponding to a time stamp. This is often referred to a raster stack 
-in other raster-specialised packages (`stars`). `terra` treats both spatial and
-spatiotemporal rasters as `SpatRaster`. 
+layer corresponding to a time stamp. This is often referred to a raster brick
+or data cube in other raster-specialised packages (`stars`). `terra` treats both 
+spatial and spatiotemporal rasters as `SpatRaster`. 
 
 Spatiotemporal grid data can be accessed within R using the `rerddap` package (as
 demonstrated in this vignette). ERDDAP servers archive environmental, 
@@ -166,9 +165,7 @@ ggplot() +
 
 # ggplot: multi-layer mapping
  ggplot() +
-  geom_spatraster(data = mpa_rast[[1:4]], # reduce nlyr for plotting
-                  #maxcell = ncell(mpa_rast[[1:4]]),
-                  maxcell = ncell(mpa_rast[[1:4]])) + 
+  geom_spatraster(data = mpa_rast[[1:4]]) # reduce nlyr for plotting + 
   scale_fill_viridis_c(labels = scales::label_number(suffix = "º")) +
   # if displaying multiple layers, use "facet_wrap( ~ lyr)"
   facet_wrap(~ lyr, # no substitute for layer names necessary - use "~lyr"
@@ -189,7 +186,7 @@ Subsetting layers is usually aided by using numerical indices that match the
 order of layers. The same goes for subsetting the time dimension.  
 
 To subset values (i.e. temperature) within the raster, we need to 'clamp' 
-the values.
+the values. This is not relevant to the current analysis but an example is provided.
 
 ```{r Subset terra rasters}
 
