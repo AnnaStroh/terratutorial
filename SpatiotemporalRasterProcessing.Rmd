@@ -165,7 +165,7 @@ ggplot() +
 
 # ggplot: multi-layer mapping
  ggplot() +
-  geom_spatraster(data = mpa_rast[[1:4]]) # reduce nlyr for plotting + 
+  geom_spatraster(data = mpa_rast[[1:4]]) + # reduce nlyr for plotting + 
   scale_fill_viridis_c(labels = scales::label_number(suffix = "º")) +
   # if displaying multiple layers, use "facet_wrap( ~ lyr)"
   facet_wrap(~ lyr, # no substitute for layer names necessary - use "~lyr"
