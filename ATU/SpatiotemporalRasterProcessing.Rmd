@@ -1,0 +1,494 @@
+---
+title: "Working with rasters in the terra package"
+author: "Anna Stroh"
+output:
+  html_document: default
+  pdf_document: default
+date: "2024-09-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# keep code just for knitting - to be copied into console
+#pandoc::with_pandoc_version(
+ # version = '2.9.1',
+  #rmarkdown::render('input.Rmd')
+#)
+
+```
+
+This vignette focuses primarily on rasters, and aims to demonstrating 
+fundamental raster operations needed to pre-process spatiotemporal rasters for 
+further use, i.e. modelling. This vignette includes code to:
+
+* load, 
+* visualise,
+* subset,
+* manipulate, and 
+* extract data into csv formats 
+
+from spatiotemporal raster files using the R package `terra`.  
+
+## _Relevant packages_
+```{package}
+
+library(terra) # raster work
+library(sf) # vector work
+
+library(ggplot2)
+library(tidyterra) # for SpatRaster/SpatVector plotting 
+library(viridis) # viridis colour-scale
+
+library(dplyr) # data wrangling
+library(tidyr)
+
+```
+
+## _Load raster data from ERDDAP servers_
+
+A spatio-temporal raster is inherently multi-layered, as it stores data in each 
+layer corresponding to a time stamp. This is often referred to a raster stack 
+in other raster-specialised packages (`stars`). `terra` treats both spatial and
+spatiotemporal rasters as `SpatRaster`. 
+
+Spatiotemporal grid data can be accessed within R using the `rerddap` package (as
+demonstrated in this vignette). ERDDAP servers archive environmental, 
+meteorological, oceanographic and biological data. 
+
+For this vignette, we use the Marine Institute Ireland 
+[ERDDAP server](https://erddap.marine.ie/erddap/) to load sea surface 
+temporature (SST). 
+This dataset provides monthly mean sea surface temperature from 2016-current in 
+Irish Western waters. Suppose this is the available raster file given for the
+research project.
+
+The loaded data often comes in form of a NetCDF file (filename.nc), which is 
+comparable to an array in R. NetCDF files can be conveniently read in
+using `rast()`. 
+
+This code chunk is based Dr Cóilín Minto's code.
+
+```{r rerddap data}
+#install.packages("rerddap")
+library(rerddap)
+
+urlBase <- "https://erddap.marine.ie/erddap/" 
+parameter <- "sea_surface_temperature"
+times <- c("2016-05-15T00:00:00Z", "2024-08-15T00:00:00Z")
+lats <- c(51, 54.5) # Western Ireland
+lons <- c(-13, -9) 
+dataInfo <- rerddap::info("IMI_Model_Stats", url = urlBase)
+
+dat <- griddap(dataInfo,
+               longitude = lons,
+               latitude = lats,
+               time = times,
+               fields = parameter,
+               url = urlBase,
+               read = FALSE,
+               store = disk()) # nc file
+
+file.size(dat$summary$filename)/1e6 ## in MB
+
+## Accessing nc file and read in as terra object
+rast <- rast(dat$summary$filename) 
+
+## Inspect spatiotemporal raster 
+rast
+
+# new: time dimension
+head(time(rast)) # get information within time dimension
+
+# more advanced: multilayer raster
+nlyr(rast)
+
+## Visualisation 
+plot(rast)
+
+```
+
+## _Cropping a raster to a desired spatial extent_ 
+
+Suppose, a raster file needs to be cropped to a custom spatial extent or object,
+i.e. an MPA. In `terra`, this is done using `crop()`.
+
+A commonly used application of `crop()`, is cropping a raster to the extent of 
+a spatial vector. A vector can be in the shape of points, lines or polygons. 
+Each of these data structures consist of pairs of coordinates 
+(i.e. latitude, longitude). 
+
+The MPA here is assumed to be polygon (a set of closed lines). 
+
+In `terra`, vectors are created using `vect()`, which creates a 
+`SpatVector` object.  
+
+```{r create SpatVector}
+
+## Create MPA SpatVector based on extent
+e <- ext(-12.8, -11.8, 52.5, 53.7) # define vector extent
+mpa <- vect(e) # create vector (SpatVector)
+crs(mpa) <- 'wgs84'
+
+mpa 
+plot(mpa)
+
+## Plot MPA with raster
+plot(rast[[1]], main = "Original raster with MPA")
+plot(mpa, add = TRUE, col = "transparent", border = "white", lwd = 3.5)
+
+## Crop temperature SpatRaster to MPA SpatVector
+mpa_rast <- crop(rast, mpa)  
+mpa_rast # produces SpatRaster
+
+rm(list = c("rast")) # remove original rast from environment
+
+```
+
+## _Short interlude on plotting `terra` objects in ggplot2_
+
+See here code to map multi-layer `SpatRasters` in `tidyterra`. For 
+`SpatVectors` see the end on the vignette.
+
+Note: Personally, I find `terra::plot` advantageous at times, as it automatically
+provides single scales for each layer. `tidyterra::geom_spatraster` appears to 
+mold all scales in a single joint scale. I think this may result in a less ideal 
+mapping of rasters with fine scale differences from one layer to the next.
+
+```{r ggplot terra}
+
+# ggplot: single layer mapping
+ggplot() + 
+  # if displaying a single layer, use "aes(fill = <layer name>)"
+  geom_spatraster(data = mpa_rast, aes(fill = sea_surface_temperature_1)) +
+  scale_fill_viridis_c(labels = scales::label_number(suffix = "º"))
+
+
+# ggplot: multi-layer mapping
+ ggplot() +
+  geom_spatraster(data = mpa_rast[[1:4]], # reduce nlyr for plotting
+                  #maxcell = ncell(mpa_rast[[1:4]]),
+                  maxcell = ncell(mpa_rast[[1:4]])) + 
+  scale_fill_viridis_c(labels = scales::label_number(suffix = "º")) +
+  # if displaying multiple layers, use "facet_wrap( ~ lyr)"
+  facet_wrap(~ lyr, # no substitute for layer names necessary - use "~lyr"
+             ncol = 2, # customise layout
+             nrow = 2)
+ 
+ #in comparison
+ plot(mpa_rast[[1:4]])
+
+```
+
+## _Subsetting and aggregating rasters_
+
+Subsetting raster layers and time dimension in R is done using double square
+brackets `[[ ]]`.
+
+Subsetting layers is usually aided by using numerical indices that match the 
+order of layers. The same goes for subsetting the time dimension.  
+
+To subset values (i.e. temperature) within the raster, we need to 'clamp' 
+the values.
+
+```{r Subset terra rasters}
+
+## Subset SpatRaster layers
+
+# to single layer
+subset1 <- mpa_rast[[1]] # [[ layer index ]]
+
+# to first three layers
+subset2 <- mpa_rast[[1:3]] # [[ layer indexes ]]
+nlyr(subset2)
+
+# custom number of layer
+subset3 <- mpa_rast[[c(1, 3:6, 9)]] # [[ c(layer indexes) ]]
+
+
+## Subset raster time dimension
+head(time(mpa_rast))
+class(time(mpa_rast))
+
+#install.packages("lubridate")
+library(lubridate) # to work with dates
+
+time(mpa_rast) <- ymd(time(mpa_rast)) # transform time dimension to year-month-day (Date) format
+dates_of_interest <- time(mpa_rast)[1:10] # matching index
+
+time_example <- mpa_rast[[ time(mpa_rast) %in% dates_of_interest ]] # subset time and assign to new raster
+
+## Subset raster values (clamping)
+
+# Clamp values from mean-sd to mean+sd temperatures 
+
+start <- mean(values(mpa_rast)) - sd(values(mpa_rast))
+end <- mean(values(mpa_rast)) + sd(values(mpa_rast))
+
+clamp_example <- clamp(mpa_rast, 
+                       start, # minimum of desired range
+                       end, # maximum of desired range
+                       # fill cells w/ values outside of range w/ extreme values
+                       values = TRUE)  
+#clamp_example
+
+# Compare raster values before and after clamping
+par(mfrow = c(1, 2))
+plot(mpa_rast, 2, main = "Original raster") 
+plot(clamp_example, 2, main = "After clamping")
+
+
+```
+
+Now, to an applied example.
+
+Suppose that, as part of a long-term monitoring programme, we have sampling 
+stations within the MPA for which fish data has been collected between 2019 to 
+2024. Our aim is to calculate mean summer SST for these stations, and extract 
+them afterwards. 
+
+In this bit, I will also show how `terra` can be used in connection with the 
+`sf` (package)[https://r-spatial.github.io/sf/]. In short, the `sf` package 
+specialises in the use, manipulation, calculation of vector data. Here, it is
+used to create a spatial vector of points within the MPA, representing sampling
+stations.
+
+Note: The number of sampling stations has been intentionally kept low to allow 
+efficient computation on all devices. 
+
+``` {r make data points}
+
+#install.packages("sf")
+library(sf)
+
+## Make data frame with station coordinates
+mpa_sf <- st_as_sf(mpa) # convert SpatVector to sf object
+
+# station IDs
+IDs <- data.frame(ID = 1:10)
+
+# randomly sample 10 stations 
+set.seed(5)
+station_coords <- st_sample(mpa_sf, 10, type = "random")
+stations_sf <- st_sf(IDs, geometry = station_coords)
+
+st_crs(mpa_sf) == st_crs(stations_sf)
+
+# plot out coords 
+ggplot() +
+  geom_sf(data = mpa_sf) +
+  geom_sf(data = stations_sf)
+
+# Bind sampling dates
+# define station sampling dates => using raster time stamps for simplicity
+dates <- data.frame(r_time = time(mpa_rast)) |>
+  mutate(year = year(r_time),
+         month = month(r_time)) |>
+  filter(year > 2018,
+         month >= 5 & month <= 8) 
+sampling_dates <- dates$r_time
+
+stations_container <- list()
+
+for (i in 1:nrow(stations_sf)) {
+  
+  # extract coordinates
+  coords <- st_coordinates(stations_sf[i, ]) # access coordinates
+  lon <- coords[1]
+  lat <- coords[2]
+  
+  # create df with coords and sampling dates (raster time stamps for simplicity)
+  stations_time <- data.frame(
+    StationID = stations_sf$ID[i],
+    Long = lon, 
+    Lat = lat,
+    SamplingDate = sampling_dates
+  )
+  
+  # bind loop df to container
+  stations_container[[i]] <- stations_time
+}
+
+mpa_stations <- do.call(rbind, stations_container) # make final df
+head(mpa_stations)
+
+# make SpatVector from dataframe
+mpa_stations_vec <- vect(mpa_stations, geom = c("Long", "Lat"), crs = "wgs84")
+dim(mpa_stations_vec)
+
+```
+
+With the sampling stations being set-up, we need to prepare the 
+raster data for extraction. Alternatively, we can extract the raw environmental
+data here, but when working with big raster files, it can be beneficial to 
+calculate the needed values within the raster before extraction.
+
+So, to extract the mean summer SST from the raster, we need to
+
+* subset the cropped raster to the range of sampling dates,
+* subset the previous subset to both summer months, and
+* aggregate raster subsets to the mean seasonal sea surface 
+temperature. 
+
+We define summer months as ranging from May to August. 
+
+`terra` offers temporal aggregation and spatial aggregation:
+
+* Temporal aggregation: aggregates raster values over chosen time interval,
+                        creates new raster with lower temporal resolution
+    + `tapp()`
+
+* Spatial aggregation: aggregates groups of cells to create larger cells,
+                       creates new raster with lower spatial resolution
+    + `aggregate()`
+
+Here, we are working only with temporal aggregation. `tapp()` accesses raster 
+layers indexed by a time index (i.e. years), and aggregates 
+these layers over a given function (i.e. mean).
+
+```{r Subset to summer}
+
+## Subset raster time dimension to sampling dates (also summer time)
+r_subset <- mpa_rast[[ time(mpa_rast) %in%  sampling_dates ]]
+
+## Aggregate summer and winter rasters
+# seasonal mean temperature for each year
+summer_agg <- tapp(r_subset, "years", fun = mean)
+summer_agg # note change in layer names and time dimension
+
+#terra::units(summer_agg) <- "C"
+#names(summer_agg) <- gsub("y_", "summer_", names(summer_agg))
+plot(summer_agg)
+
+```
+# Part 4: __Raster extraction__
+
+The last part of this vignette demonstrates how to extract raster values for a 
+given spatial geometry (point in this case). This is particularly useful for
+linking raster-based environmental data to biological data at sampling locations 
+(i.e. stations). 
+
+Here, we aim to link mean summer SST to the MPA sampling stations. 
+
+Raster data for a given object is extracted using the `extract()` function.
+
+To bind the extracted data, the most straightforward way is to include the 
+argument `bind=TRUE` which cbinds the extracted raster values to the 
+`SpatVector` of the sampling stations. 
+
+We can then transform the `SpatVector` with the extracted value into a 
+data frame to further shape it into a suitable format.  
+
+``` {r extract data points}
+
+## Extract temperature data
+# reduce to coordinates make SpatVector from dataframe
+mpa_stations_vec <- mpa_stations |>
+  select(StationID, Long, Lat) |>
+  distinct() |>
+  vect(geom = c("Long", "Lat"), crs = "wgs84") # make df a SpatVector
+dim(mpa_stations_vec)
+
+sst_extr <- terra::extract(summer_agg, # SpatRaster
+                           mpa_stations_vec, # SpatVector
+                           # returns value from the cell the coords fall into
+                           method = "simple",
+                           # binds raster values to vector
+                           bind = TRUE) # do not return cell ID
+
+head(sst_extr) 
+
+# make dataframe
+sst_extr_df <- terra::as.data.frame(sst_extr) # wide format
+head(sst_extr_df)
+
+## Reshape and clean-up
+
+#install.packages("reshape2")
+# wide to long
+sst_extr_melt <- reshape2::melt(sst_extr_df, 
+                                id = c("StationID"))
+head(sst_extr_melt)
+
+station_sst <- sst_extr_melt |>
+  
+  # rename layers
+  dplyr::rename(Year = variable,
+                MSST = value) |>
+  
+  # clean up year variable
+  mutate(Year = gsub("y_", "", Year)) |>
+  
+  # merge in station sampling date and locations
+  merge(mpa_stations) |>
+  
+  # change order of columns
+  relocate(SamplingDate, .before = Year)
+
+head(station_sst) # FINAL DATA FRAME READY FOR EXPORT
+
+
+## Plot final output
+st_vec <- vect(station_sst, geom = c("Long", "Lat"), crs = "wgs84")
+head(st_vec)
+st_vec
+
+ggplot() +
+  geom_spatvector(data = st_vec, aes(colour = MSST)) + # plot SpatVector
+  scale_colour_viridis_c(
+    labels = scales::label_number(suffix = "º")) +
+  geom_spatvector(data = mpa, fill = NA, colour = "black") +
+  facet_wrap( ~ Year) +
+  labs(colour = "Mean\nSummer\nSST") +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 90))
+
+
+
+```
+# Extra: __Raster animation__
+
+This part is not compulsory for raster analysis, but demonstrates a fun way to
+visualise raster data. `terra` has an in-built function to sequentially plot 
+raster layers, which can then be exported as a video or gif file: an animation of
+the raster. 
+
+Note: I am intentionally using the aggregated raster with regards to rendering 
+processes. 
+
+```{r raster animation}
+
+## Make animation
+terra::animate(summer_agg, n = 1)
+
+## Save animation as gif
+#install.packages("gifski")
+gifski::save_gif(terra::animate(summer_agg, n = 1),
+                       delay = 1,
+                       loop = FALSE,
+                       gif_file = "summer_sst.gif")
+
+```
+# __Conclusion__
+
+This vignette aimed to provide a general flow of operations needed to 
+manipulate rasters and extract environmental variables. There are of course 
+many more and alternative ways to do what I have done here, but I aimed to
+demonstrate the versatility and power of the `terra` package. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
