@@ -5,11 +5,6 @@ This repository contains material and a general workflow to work with raster dat
 
 The first iteration of the workshop was a tutorial taught on Nov 6, 2024 to staff and postgraduates at the Marine and Freshwater Research Centre (MFRC) at the Atlantic Technological University (ATU). 
 Lecture slides introducing the spatiotemporal rasters and the terra package as well as code for that workshop are in the *ATU* folder.
-*Files in ATU*:
-- lecture slides
-- example R code
-- R vignette for standard raster processing
-- Additional online resources for geostastical operations and R programming
 
 The second iteration of the workshop was taught to staff of the Marine Institute Ireland on Jan 30, 2025. Its workshop files can be found in the folder *MI*. 
 *Files in MI*:
