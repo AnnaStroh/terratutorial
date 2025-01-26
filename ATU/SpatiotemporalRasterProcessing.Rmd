@@ -31,7 +31,7 @@ further use, i.e. modelling. This vignette includes code to:
 from spatiotemporal raster files using the R package `terra`.  
 
 ## _Relevant packages_
-```{package}
+```{r packages}
 
 library(terra) # raster work
 library(sf) # vector work
