@@ -1,0 +1,494 @@
+---
+title: "Working with rasters in the terra package"
+author: "Anna Stroh"
+output:
+  html_document: default
+  pdf_document: default
+date: "2024-09-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# keep code just for knitting - to be copied into console
+#pandoc::with_pandoc_version(
+ # version = '2.9.1',
+  #rmarkdown::render('input.Rmd')
+#)
+
+```
+
+This vignette focuses primarily on rasters, and aims to demonstrating 
+fundamental raster operations needed to pre-process spatiotemporal rasters for 
+further use, i.e. modelling. This vignette includes code to:
+
+* load, 
+* visualise,
+* subset,
+* manipulate, and 
+* extract data into csv formats 
+
+from spatiotemporal raster files using the R package `terra`. 
+
+This script provides a workflow from loading environmental raster data and trawl
+survey from online databases into R, pre-process the raster data, and extract
+raster data for trawl survey data. The final product will be a data frame with
+the trawl survey data and its corresponding environmental data point. 
+
+## _Relevant packages_
+```{r install packages}
+### IF NOT ALREADY INSTALLED
+
+# Raster and vector manipulation
+install.packages("terra") 
+install.packages("sf")
+
+# Plotting and raster work aids
+install.packages("ggplot2")
+install.packages("tidyterra")
+install.packages("viridis") # colour-blind colour scale
+
+# Data wrangling
+install.packages("dplyr")
+install.packages("tidyr")
+install.packages("lubridate")
+
+```
+
+## _Relevant packages_
+```{r load packages}
+
+library(terra) # raster work
+library(sf) # vector work
+
+library(ggplot2)
+library(tidyterra) 
+library(viridis)
+
+library(dplyr)
+library(tidyr)
+
+```
+
+## _Load raster data from ERDDAP servers_
+
+Spatiotemporal grid data can be accessed within R using the `rerddap` package. 
+Since the currently available ERDDAP data does not overlap with available survey
+data, I will only demonstrate how to use `rerddap`. 
+
+The loaded data is significant wave height, a value calculated from the Irish 
+Shelf SWAN wave model. For the exercise we use a 2022 hindcast of wave height 
+from that model.   
+
+```{r rerddap data}
+#install.packages("rerddap")
+library(rerddap)
+
+?rerddap
+
+# What are publicly available ERDDAP servers?
+AllServers <- rerddap::servers()
+names(AllServers) # name and url
+
+# Search for available data sets for a given variable on MI server
+whParameter = "significant_wave_height"
+urlBase = "https://erddap.marine.ie/erddap/"
+whichWH <- ed_search(query = whParameter, 
+                      url =  urlBase, # server of interest
+                      which = "griddap") # gridded or tabulated data?
+
+# Get info on the dataset
+whInfo <- rerddap::info('IMI_IRISH_SHELF_SWAN_WAVE', 
+                url =  urlBase)
+
+# Load data into R session
+#whTimes <- c("2025-01-19T00:00:00Z", "2025-01-29T00:00:00Z")
+whLats <- c(51, 54.5) # Western Ireland
+whLons <- c(-13, -9) 
+
+whDat <- griddap(whInfo, 
+                  longitude = whLons, 
+                  latitude = whLats,
+                  #time = sstTimes, # omitted for changes in data availability
+                  fields = whParameter,
+                  url = urlBase,
+                  fmt = "nc", # netcdf file format; forces storage on disk
+                  read = FALSE) # do not read into memory
+
+
+file.size(whDat$summary$filename)/1e6 ## in MB
+
+example <- rast(whDat$summary$filename)
+plot(example)
+
+rm(list = c("whDat", "example")) # optional if you have less memory space
+
+```
+
+## _Reading and visualising spatio-temporal rasters in terra_
+
+For the exercise, we use wave height data that was previously requested for my 
+previous research project. Please copy this link, paste into your browser and 
+download the file:
+https://www.dropbox.com/scl/fi/d505u992jzswppckcu11d/wh_time_sub.nc?rlkey=2h38k
+jn4soovolyqxyb96hmze&st=vbvmfvab&dl=0
+
+In `terra`, `rast()` creates a SpatRaster object. The functions takes the common 
+file types as input. The GDAL driver recognises them by the filetype ending 
+(i.e. filename.nc - NetCDF).
+
+```{r read rasters}
+
+#your_path <- ""
+your_path <- getwd()
+raster_file <- "wh_time_sub.nc" # include filetype (.nc) for optimised read
+
+## Read file into R
+wh_rast <- rast(paste0(your_path, "/", raster_file))
+
+## Explore file 
+wh_rast
+
+# spatial dimensions
+dim(wh_rast)
+nrow(wh_rast)
+ncol(wh_rast)
+#crs(wh_rast)
+res(wh_rast)
+ext(wh_rast)
+
+# time dimension
+head(time(wh_rast))
+length(time(wh_rast)) == nlyr(wh_rast) # each time stamp = one raster layer
+#min(time(wh_rast))
+
+# variable and raster layers
+varnames(wh_rast) # single band raster
+head(names(wh_rast)) # multilayer raster
+#nlyr(wh_rast)
+
+# raster values
+#head(values(wh_rast)) # caution - requires lots in memory
+
+```
+
+The file contains a hindcast of significant wave height in the months November-
+December 2022. `nlyr()` shows you that it is a multilayered raster (raster cube).      
+`time()` shows you that each time stamp represents a raster layer. The present
+raster provides the value of significant wave height every three hours between 
+November-December.
+
+`rast()` does not differentiate between spatial or spatiotemporal rasters. This
+is because a SpatRaster is represented by three dimensionsional cells (rows, 
+columns, layers). `terra` is efficient with large raster files because a 
+SpatRaster object only stores the parameters that describe the raster file, but 
+not the cell (pixel) values.  
+
+```{r visualise rasters}
+# terra method
+plot(wh_rast)
+
+# ggplot method (requires package "tidyterra")
+ggplot() +
+  geom_spatraster(data = wh_rast[[1:4]], # reduce nlyr for plotting
+                  maxcell = ncell(wh_rast[[1:4]])) + 
+  scale_fill_viridis_c(name = "wave \nheight (m)") +
+  # if displaying multiple layers, use "facet_wrap( ~ lyr)"
+  facet_wrap(~ lyr, # no substitute for layer names necessary - use "~lyr"
+             ncol = 2, # customise layout
+             nrow = 2) +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 90))
+
+
+```
+## _Loading ICES trawl survey data_ 
+
+```{r icesDatras}
+#install.packages("icesDatras")
+library(icesDatras)
+
+# What surveys are available?
+getSurveyList()
+
+# Basic queries of standard data
+#getCAdata() # age-based data 
+#getHLdata() # length-based data
+#getHHdata() # haul information 
+
+# Get HH data for Irish Groundfish Survey (IE-IGFS)
+HHigfs <- getHHdata(survey = "IE-IGFS", year = 2022, quarter = 4)
+head(HHigfs)
+names(HHigfs)
+
+HHigfs <- HHigfs |>
+  select(Survey, HaulNo, Year, Month, Day, 
+         ShootLat, ShootLong) |>
+  mutate(Survey = "IGFS",
+         HaulID = paste0(Survey, Year, "H", HaulNo),
+         SamplingDate = lubridate::make_date(Year, Month, Day))
+
+# Make sf object 
+HHigfs_sf <- HHigfs |>
+  st_as_sf(coords = c("ShootLong", "ShootLat"), crs = crs(wh_rast))
+head(HHigfs_sf)
+
+```
+
+```{r plot survey}
+
+## Convert sf object to terra SpatVector (example sf-terra interaction)
+HHigfs_vect <- vect(HHigfs_sf)
+
+plot(wh_rast[[1]], main = "Original raster with 2022 IGFS hauls") # select L248-249
+plot(HHigfs_vect, add = TRUE, col = "white", lwd = 3.5)
+  
+```
+## _Cropping a raster to a desired spatial extent_ 
+
+Suppose, we are only interested in the hauls completed in ICES areas 7j-g. 
+To make the data extraction more efficient, we can crop the raster to the 
+desired spatial range. 
+
+To crop a raster to a custom spatial extent, raster object or spatial vector, 
+use `crop()`.
+
+A vector can be in the shape of points, lines or polygons. Spatial vectors 
+consist of a single dimension with a distinct spatial feature geometry 
+(i.e. polygon).
+
+In `terra`, vectors are created using `vect()`, which creates a 
+`SpatVector` object (either from scratch or from an sf object).  
+
+```{r create SpatVector}
+
+## Create MPA SpatVector based on extent
+e <- ext(-12.35, -5, 49.9, 52.5) # vector extent for ICES areas 7 j-g
+areas7jg <- vect(e) # create vector (SpatVector)
+crs(areas7jg) <- 'wgs84'
+
+areas7jg 
+plot(areas7jg)
+
+## Plot ICES areas with raster
+plot(wh_rast[[1]], main = "Original raster with ICES area 7j-g cut-off")
+plot(areas7jg, add = TRUE, col = "transparent", border = "white", lwd = 3.5)
+
+## Crop wave height SpatRaster to ICES area SpatVector
+ICESarea_rast <- crop(wh_rast, areas7jg)  
+ICESarea_rast # produces SpatRaster
+
+plot(ICESarea_rast[[1:4]])
+
+## Crop haul points to ICES area SpatVector
+HHigfs_coords <- HHigfs |> 
+  select(HaulID, ShootLong, ShootLat) |>
+  distinct() |>
+  vect(geom = c("ShootLong", "ShootLat"), crs = "wgs84") # make df a SpatVector
+dim(HHigfs_coords)
+
+HHigfs_7jg <- crop(HHigfs_coords, areas7jg)  
+HHigfs_7jg # produces SpatRaster
+
+plot(HHigfs_7jg)
+
+rm(list = c("wh_rast", "HHigfs_coords", "HHigfs_vect")) # remove original rast from environment
+
+```
+
+## _Subsetting and aggregating rasters_
+
+Subsetting raster layers and time dimension in R is done using double square
+brackets `[[ ]]`.
+
+Subsetting layers is usually aided by using numerical indices that match the 
+order of layers. The same goes for subsetting the time dimension.  
+
+```{r Subset terra rasters}
+
+## Subset SpatRaster layers
+
+# to single layer
+subset1 <- ICESarea_rast[[1]] # [[ layer index ]]
+
+# custom number of layer
+subset2 <- ICESarea_rast[[c(1, 3:6, 9)]] # [[ c(layer indexes) ]]
+
+# or using function
+subset3 <- subset(ICESarea_rast, 1)
+
+```
+
+Before we do a meaningful subset of the time dimension, we need to aggregate 
+the raster file. 
+
+`terra` offers temporal aggregation and spatial aggregation:
+
+* Temporal aggregation: aggregates raster values over chosen time interval,
+                        creates new raster with lower temporal resolution
+    + `tapp()`
+
+* Spatial aggregation: aggregates groups of cells to create larger cells,
+                       creates new raster with lower spatial resolution
+    + `aggregate()`
+
+Here, we are working only with temporal aggregation. `tapp()` accesses raster 
+layers indexed by a time index (i.e. years), and aggregates 
+these layers over a given function (i.e. mean).
+
+```{r Aggregate}
+
+## Aggregate hourly time stamps to daily mean
+D_mean_wh <- tapp(ICESarea_rast, "days", fun = mean)
+D_mean_wh # note change in layer names and time dimension
+
+plot(D_mean_wh[[1:6]]) 
+
+```
+
+Now, we can further pre-process the raster by subsetting the raster time 
+dimension to the dates of the survey hauls. Just as before, we create an index 
+that is matching the values in the time dimension. Be careful in this step not
+to overwrite the time dimension of the original raster if you still need it. 
+
+```{r TimeDim Subset}
+
+## Subset raster time dimension
+head(time(D_mean_wh))
+class(time(D_mean_wh))
+
+haul_dates <- lubridate::ymd(HHigfs_sf$SamplingDate) # matching index
+#class(haul_dates)
+
+wh_IGFS_sub <- D_mean_wh[[ time(D_mean_wh) %in% haul_dates ]] # subset time and assign to new raster
+
+rm(list = c("D_mean_wh")) # optional
+
+```
+
+# Part 4: __Raster extraction__
+
+The last part of this vignette demonstrates how to extract raster values for a 
+given spatial geometry (point in this case). This is particularly useful for
+linking raster-based environmental data to biological data at sampling locations 
+(i.e. stations). 
+
+Here, we aim to link mean daily wave height to the IGFS sampling stations in 
+ICES areas 7j-g. 
+
+Raster data for a given object is extracted using the `extract()` function.
+
+To bind the extracted data, the most straightforward way is to include the 
+argument `bind=TRUE` which cbinds the extracted raster values to the 
+`SpatVector` of the sampling stations. 
+
+We can then transform the `SpatVector` with the extracted value into a 
+data frame to further shape it into a suitable format.  
+
+``` {r extract data points}
+
+## Extract wave height data
+# reduce to coordinates make SpatVector from dataframe
+wh_extr <- terra::extract(wh_IGFS_sub, # SpatRaster
+                          HHigfs_7jg, # SpatVector
+                           # returns value from the cell the coords fall into
+                          method = "simple",
+                           # binds raster values to vector
+                          bind = TRUE) # do not return cell ID
+
+head(wh_extr) 
+
+# make dataframe
+wh_extr_df <- terra::as.data.frame(wh_extr) # wide format
+head(wh_extr_df)
+
+## Reshape and clean-up
+
+#install.packages("reshape2")
+# wide to long
+wh_extr_melt <- reshape2::melt(wh_extr_df, 
+                                id = c("HaulID"))
+head(wh_extr_melt)
+
+station_wh <- wh_extr_melt |>
+  
+  # rename layers
+  dplyr::rename(SamplingDate = variable,
+                DAvWh = value) |>
+  
+  # clean up year variable
+  mutate(SamplingDate = lubridate::ymd(gsub("d_", "", SamplingDate))) |>
+  
+  # merge in station sampling date and locations
+  merge(HHigfs) |>
+  
+  # change order of columns
+  relocate(SamplingDate, .before = SamplingDate)
+
+head(station_wh) # FINAL DATA FRAME READY FOR EXPORT
+
+
+## Plot final output
+st_vec <- vect(station_wh, geom = c("ShootLong", "ShootLat"), crs = "wgs84")
+head(st_vec)
+st_vec
+
+ggplot() +
+  geom_spatvector(data = st_vec, aes(colour = DAvWh)) + # plot SpatVector
+  scale_colour_viridis_c() +
+  geom_spatvector(data = areas7jg, fill = NA, colour = "black") +
+  labs(colour = "Daily\nAverage\nWaveheight (m)") +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 90))
+
+
+
+```
+# Extra: __Raster animation__
+
+This part is not compulsory for raster analysis, but demonstrates a fun way to
+visualise raster data. `terra` has an in-built function to sequentially plot 
+raster layers, which can then be exported as a video or .gif file: an animation 
+of the raster. 
+
+I am intentionally using the aggregated raster with regards to rendering 
+processes. 
+
+```{r raster animation}
+
+## Make animation
+terra::animate(wh_IGFS_sub, n = 1)
+
+## Save animation as gif
+#install.packages("gifski")
+gifski::save_gif(terra::animate(wh_IGFS_sub, n = 1),
+                       delay = 1,
+                       loop = FALSE,
+                      #gif_file = paste0(your_path, "/", "wh_ICES7jg.gif"),
+                       gif_file = "wh_ICES7jg.gif")
+
+```
+# __Conclusion__
+
+This vignette aimed to provide a general flow of operations needed to 
+manipulate rasters and extract environmental variables. There are of course 
+many more and alternative ways to do what I have done here, but I aimed to
+demonstrate the versatility and power of the `terra` package. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
